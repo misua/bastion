@@ -1,0 +1,187 @@
+#!/bin/bash
+# SSH Key Identifier Script
+# This script extracts user identifiers from SSH keys and logs them with connections
+
+# Create directory for key mapping
+sudo mkdir -p /etc/ssh/key_mapping
+sudo chmod 755 /etc/ssh/key_mapping
+
+# Function to extract identifiers from authorized_keys
+extract_key_identifiers() {
+  local auth_keys_file="/etc/ssh/authorized_keys"
+  local mapping_file="/etc/ssh/key_mapping/fingerprint_to_user.txt"
+  
+  # Clear existing mapping
+  sudo rm -f "$mapping_file"
+  sudo touch "$mapping_file"
+  sudo chmod 644 "$mapping_file"
+  
+  # Process each line in authorized_keys
+  while IFS= read -r line; do
+    # Skip empty lines and comments
+    if [[ -z "$line" || "$line" == \#* ]]; then
+      continue
+    fi
+    
+    # Extract the key and save to a temporary file
+    echo "$line" | sudo tee /tmp/temp_key.pub > /dev/null
+    
+    # Get the fingerprint
+    fingerprint=$(ssh-keygen -lf /tmp/temp_key.pub | awk '{print $2}')
+    
+    # Extract the comment/email (usually at the end of the line)
+    identifier=$(echo "$line" | awk '{print $NF}')
+    
+    # If identifier looks like a valid email or username
+    if [[ "$identifier" == *@* || "$identifier" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+      echo "$fingerprint $identifier" | sudo tee -a "$mapping_file" > /dev/null
+      echo "Mapped fingerprint $fingerprint to user $identifier"
+    else
+      echo "No valid identifier found for key with fingerprint $fingerprint"
+    fi
+  done < "$auth_keys_file"
+  
+  # Clean up
+  rm -f /tmp/temp_key.pub
+}
+
+# Create PAM SSH module hook script
+create_pam_hook() {
+  local hook_script="/etc/ssh/sshrc"
+  
+  sudo cat << 'EOF' | sudo tee "$hook_script" > /dev/null
+#!/bin/bash
+
+# Get the key fingerprint used for this connection
+KEY_FP=$(ssh-keygen -lf <(ssh-keyscan -t rsa,dsa,ecdsa,ed25519 localhost 2>/dev/null) | awk '{print $2}')
+
+# Look up the user identifier
+if [ -f "/etc/ssh/key_mapping/fingerprint_to_user.txt" ]; then
+  USER_ID=$(grep "$KEY_FP" /etc/ssh/key_mapping/fingerprint_to_user.txt | awk '{print $2}')
+  
+  if [ -n "$USER_ID" ]; then
+    # Log the identified user
+    logger -p auth.info "SSH LOGIN: User $USER_ID (fingerprint: $KEY_FP) logged in from $SSH_CLIENT"
+    
+    # Set a custom PS1 prompt with the user identifier
+    echo "export PS1='[$USER_ID] \u@\h:\w\$ '" >> ~/.bashrc
+    
+    # Display welcome message
+    echo "Welcome $USER_ID. Your actions are being logged."
+  else
+    logger -p auth.info "SSH LOGIN: Unknown user with fingerprint $KEY_FP logged in from $SSH_CLIENT"
+    echo "Welcome. Your actions are being logged."
+  fi
+else
+  logger -p auth.info "SSH LOGIN: Key mapping file not found. User from $SSH_CLIENT logged in."
+  echo "Welcome. Your actions are being logged."
+fi
+EOF
+
+  sudo chmod +x "$hook_script"
+}
+
+# Create a script to update key mappings when keys are updated
+create_key_update_hook() {
+  local update_script="/usr/local/bin/update_key_mappings.sh"
+  
+  sudo cat << 'EOF' | sudo tee "$update_script" > /dev/null
+#!/bin/bash
+# This script is called after the authorized_keys file is updated
+
+# Source the key identifier script
+source /usr/local/bin/ssh_key_identifier.sh
+
+# Extract identifiers from the updated keys
+extract_key_identifiers
+
+# Log the update
+logger -p auth.info "SSH key mappings updated"
+EOF
+
+  sudo chmod +x "$update_script"
+  
+  # Add a call to this script in the update_ssh_keys.sh file
+  if [ -f "/usr/local/bin/update_ssh_keys.sh" ]; then
+    # Check if the hook is already added
+    if ! grep -q "update_key_mappings.sh" "/usr/local/bin/update_ssh_keys.sh"; then
+      # Add the call before the exit
+      sudo sed -i '/exit 0/i # Update key mappings\n/usr/local/bin/update_key_mappings.sh' /usr/local/bin/update_ssh_keys.sh
+    fi
+  fi
+}
+
+# Add audit rule to track user commands with the identifier
+setup_audit_rules() {
+  # Create a script to add the audit rules
+  local audit_script="/usr/local/bin/setup_audit_rules.sh"
+  
+  sudo cat << 'EOF' | sudo tee "$audit_script" > /dev/null
+#!/bin/bash
+
+# Add audit rules for command execution
+auditctl -a exit,always -F arch=b64 -S execve -k commands
+auditctl -a exit,always -F arch=b32 -S execve -k commands
+
+# Make rules persistent
+if [ -d "/etc/audit/rules.d" ]; then
+  echo "-a exit,always -F arch=b64 -S execve -k commands" | sudo tee /etc/audit/rules.d/command-logging.rules
+  echo "-a exit,always -F arch=b32 -S execve -k commands" | sudo tee -a /etc/audit/rules.d/command-logging.rules
+fi
+EOF
+
+  sudo chmod +x "$audit_script"
+  sudo "$audit_script"
+}
+
+# Create a script to search audit logs with user identifiers
+create_audit_search_tool() {
+  local search_script="/usr/local/bin/audit-search-by-user.sh"
+  
+  sudo cat << 'EOF' | sudo tee "$search_script" > /dev/null
+#!/bin/bash
+# Script to search audit logs by user identifier
+
+if [ $# -lt 1 ]; then
+  echo "Usage: $0 <user_identifier> [date_spec]"
+  echo "Example: $0 john.doe@example.com today"
+  exit 1
+fi
+
+USER_ID="$1"
+DATE_SPEC="${2:-today}"
+
+# Find SSH sessions for this user
+echo "=== SSH Sessions for $USER_ID ==="
+grep "SSH LOGIN: User $USER_ID" /var/log/auth.log
+
+# Get the audit session IDs for this user
+SESSION_IDS=$(grep "SSH LOGIN: User $USER_ID" /var/log/auth.log | grep -oP "ses=\K[0-9]+" || echo "")
+
+if [ -z "$SESSION_IDS" ]; then
+  echo "No session IDs found for $USER_ID"
+  exit 0
+fi
+
+# Search audit logs for each session
+for SES_ID in $SESSION_IDS; do
+  echo ""
+  echo "=== Commands for session $SES_ID ==="
+  ausearch -ts "$DATE_SPEC" -k commands --session "$SES_ID" -i
+done
+EOF
+
+  sudo chmod +x "$search_script"
+}
+
+# Main execution
+extract_key_identifiers
+create_pam_hook
+create_key_update_hook
+setup_audit_rules
+create_audit_search_tool
+
+# Initial run to populate the mapping
+/usr/local/bin/update_key_mappings.sh
+
+echo "SSH key identifier system has been set up successfully."

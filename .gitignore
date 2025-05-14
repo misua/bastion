@@ -1,0 +1,54 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dev-debug.log
+
+# Dependency directories
+node_modules/
+
+# Environment variables
+.env
+
+# Editor directories and files
+.idea
+.vscode
+*.suo
+*.ntvs*
+*.njsproj
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfplan
+
+# Unused scripts
+terraform/unused_scripts/
+
+# Temporary files
+temp_*
+*.tmp
+
+# SSH keys (never commit these to git)
+*.pem
+*_key
+*_key.pub
+
+# Sensitive data
+*.tfvars
+*.sln
+*.sw?
+
+# OS specific
+.DS_Store
+
+# Task files
+tasks.json
+tasks/ 
+
+# Cursor
+.cursor
+.roo

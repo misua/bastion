@@ -1,0 +1,489 @@
+#!/bin/bash
+# This is a simple wrapper script that sets the GitHub URL variable
+# and then executes the main user data script
+
+# Set the GitHub URL and token from Terraform
+GITHUB_TOKEN="${github_token}"
+GITHUB_BASE_URL="${github_repo_url}"
+
+# If a token is provided, insert it into the URL for authentication
+if [ -n "$GITHUB_TOKEN" ]; then
+  # Add token to URL for authentication
+  GITHUB_RAW_URL="$(echo $GITHUB_BASE_URL | sed 's|https://|https://'"$GITHUB_TOKEN"'@|')"
+else
+  # No token provided, use the URL as is (for public repositories)
+  GITHUB_RAW_URL="$GITHUB_BASE_URL"
+fi
+
+export GITHUB_RAW_URL
+
+# Execute the main user data script
+cat > /tmp/main_user_data.sh << 'MAINSCRIPT'
+#!/bin/bash
+set -e
+set -x # Log commands
+
+LOG_FILE="/var/log/bastion_userdata.log"
+echo "User data script started at $(date)" | tee -a $LOG_FILE
+
+# Redirect all output to log file
+exec > >(tee -a $LOG_FILE) 2>&1
+
+# Variables passed from Terraform
+GITHUB_RAW_URL="$GITHUB_RAW_URL"
+CENTRAL_KEYS_FILE="/etc/ssh/authorized_keys"
+
+# --- Task 5: Install Required Packages --- 
+echo "--- Starting Task 5: Installing Packages ---"
+sudo apt-get update -y
+# Install packages needed for key management, auditing, and utilities
+sudo apt-get install -y curl git jq auditd audispd-plugins acl logrotate apt-transport-https ca-certificates gnupg software-properties-common
+# Note: 'script' command is usually part of 'bsdutils' or 'util-linux', typically pre-installed.
+# Note: iptables-persistent was removed as per user request.
+
+# --- Task 6, 7, 9: Create Key Update Script, Make Executable, Create Log File ---
+echo "--- Starting Tasks 6, 7, 9: Key Update Script Setup ---"
+
+# Task 9: Create log file first
+echo "Creating log file /var/log/ssh_key_updates.log"
+sudo touch /var/log/ssh_key_updates.log
+sudo chmod 644 /var/log/ssh_key_updates.log
+sudo chown root:root /var/log/ssh_key_updates.log # Ensure ownership
+
+# Task 6: Create the key update script using heredoc
+echo "Creating /usr/local/bin/update_ssh_keys.sh"
+sudo cat << 'EOF' > /usr/local/bin/update_ssh_keys.sh
+#!/bin/bash
+set -e
+
+# Configuration
+# Using a placeholder that will be replaced by sed later
+GITHUB_REPO_URL_VAR="##GITHUB_REPO_URL_PLACEHOLDER##"
+KEYS_FILE_NAME="authorized_keys"
+LOCAL_FILE="/etc/ssh/authorized_keys"
+LOG_FILE="/var/log/ssh_key_updates.log"
+
+# Log function
+log() {
+  echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | sudo tee -a $LOG_FILE
+}
+
+log "Starting SSH key update"
+
+# Fetch the authorized_keys file from GitHub
+log "Fetching keys from $GITHUB_REPO_URL_VAR"
+# Use curl with fail-early, silent, and location-follow options
+if ! curl -s -f -L -o /tmp/$KEYS_FILE_NAME $GITHUB_REPO_URL_VAR; then
+  log "ERROR: Failed to download authorized_keys from $GITHUB_REPO_URL_VAR (curl exit code: $?)"
+  # Exit if download fails to prevent wiping keys on transient network issues
+  exit 1
+fi
+
+# Verify it's not empty and looks like SSH keys
+# Improved grep pattern for various key types
+if [ ! -s "/tmp/$KEYS_FILE_NAME" ] || ! grep -qE '^(ssh-(rsa|dss|ed25519|ecdsa)|ecdsa-sha2-nistp(256|384|521)) ' "/tmp/$KEYS_FILE_NAME"; then
+  log "ERROR: Downloaded file /tmp/$KEYS_FILE_NAME is empty or doesn't contain valid SSH key formats. Aborting update."
+  rm -f /tmp/$KEYS_FILE_NAME
+  exit 1
+fi
+
+# Make immutable flag removable if set before comparison/copy
+IMMUTABLE_SET=false
+if command -v chattr &>/dev/null && [ -f "$LOCAL_FILE" ]; then
+    if lsattr "$LOCAL_FILE" 2>/dev/null | grep -q -- '-i-'; then
+        log "Making $LOCAL_FILE mutable before update."
+        sudo chattr -i "$LOCAL_FILE"
+        IMMUTABLE_SET=true # Remember that we need to re-apply it
+    fi
+fi
+
+# Compare with current file to see if update is needed
+if [ -f "$LOCAL_FILE" ] && cmp -s "/tmp/$KEYS_FILE_NAME" "$LOCAL_FILE"; then
+  log "No changes detected in authorized_keys"
+  # Re-apply immutable flag if it was removed
+  if [ "$IMMUTABLE_SET" = true ] && command -v chattr &>/dev/null; then
+     sudo chattr +i "$LOCAL_FILE" 2>/dev/null || true
+     log "Re-applied immutable flag to $LOCAL_FILE."
+  fi
+  rm -f /tmp/$KEYS_FILE_NAME
+  exit 0
+fi
+
+log "Changes detected. Updating $LOCAL_FILE."
+
+# Back up current file if it exists
+if [ -f "$LOCAL_FILE" ]; then
+  BACKUP_FILE="$LOCAL_FILE.$(date +%Y%m%d%H%M%S).bak"
+  log "Backing up current keys to $BACKUP_FILE"
+  sudo cp "$LOCAL_FILE" "$BACKUP_FILE"
+fi
+
+# Update the authorized_keys file
+sudo cp "/tmp/$KEYS_FILE_NAME" "$LOCAL_FILE"
+sudo chown root:root "$LOCAL_FILE"
+sudo chmod 644 "$LOCAL_FILE"
+
+# Make immutable to prevent local changes
+if command -v chattr &>/dev/null; then
+  log "Making $LOCAL_FILE immutable."
+  sudo chattr +i "$LOCAL_FILE" 2>/dev/null || true # Use sudo here too
+fi
+
+log "SSH keys updated successfully"
+
+# Restart SSH service if keys changed
+log "Restarting SSH service (sshd)"
+sudo systemctl restart sshd
+log "SSH service restart command issued."
+
+# Clean up
+rm -f /tmp/$KEYS_FILE_NAME
+
+exit 0
+EOF
+
+# Replace the placeholder with the actual URL from Terraform variable
+# Using '#' as delimiter for sed to avoid issues with '/' in the URL
+sudo sed -i "s#^GITHUB_REPO_URL_VAR=.*#GITHUB_REPO_URL_VAR=\"$GITHUB_RAW_URL\"#" /usr/local/bin/update_ssh_keys.sh
+
+# Task 7: Make script executable
+echo "Making /usr/local/bin/update_ssh_keys.sh executable"
+sudo chmod +x /usr/local/bin/update_ssh_keys.sh
+
+# --- Task 8: Create Cron Job for Key Updates ---
+echo "--- Starting Task 8: Creating Cron Job ---"
+echo "Creating cron job /etc/cron.d/update-ssh-keys"
+echo "*/15 * * * * root /usr/local/bin/update_ssh_keys.sh" | sudo tee /etc/cron.d/update-ssh-keys
+sudo chmod 0644 /etc/cron.d/update-ssh-keys # Ensure correct permissions
+
+# --- Task 10 & 14: Configure SSHd --- 
+echo "--- Starting Tasks 10 & 14: Configuring SSHd ---"
+SSHD_CONFIG="/etc/ssh/sshd_config"
+
+echo "Configuring $SSHD_CONFIG"
+
+# Use sed to modify sshd_config, commenting out old lines if they exist and adding/uncommenting new ones
+# Task 10: Centralized keys file
+sudo sed -i -e 's/^\(#\s*\)*AuthorizedKeysFile.*/# & # Modified by user_data/' "$SSHD_CONFIG"
+sudo bash -c "echo 'AuthorizedKeysFile $CENTRAL_KEYS_FILE' >> $SSHD_CONFIG"
+
+# Task 10: Disable PasswordAuthentication
+sudo sed -i -e 's/^\(#\s*\)*PasswordAuthentication.*/# & # Modified by user_data/' "$SSHD_CONFIG"
+sudo bash -c "echo 'PasswordAuthentication no' >> $SSHD_CONFIG"
+
+# Task 10: Disable ChallengeResponseAuthentication
+sudo sed -i -e 's/^\(#\s*\)*ChallengeResponseAuthentication.*/# & # Modified by user_data/' "$SSHD_CONFIG"
+sudo bash -c "echo 'ChallengeResponseAuthentication no' >> $SSHD_CONFIG"
+
+# Task 10: Enable TCP Forwarding (Adjust if not needed)
+sudo sed -i -e 's/^\(#\s*\)*AllowTcpForwarding.*/# & # Modified by user_data/' "$SSHD_CONFIG"
+sudo bash -c "echo 'AllowTcpForwarding yes' >> $SSHD_CONFIG"
+
+# Task 14: Syslog Facility
+sudo sed -i -e 's/^\(#\s*\)*SyslogFacility.*/# & # Modified by user_data/' "$SSHD_CONFIG"
+sudo bash -c "echo 'SyslogFacility AUTH' >> $SSHD_CONFIG"
+
+# Task 14: Log Level
+sudo sed -i -e 's/^\(#\s*\)*LogLevel.*/# & # Modified by user_data/' "$SSHD_CONFIG"
+sudo bash -c "echo 'LogLevel VERBOSE' >> $SSHD_CONFIG"
+
+# Validate SSH config
+echo "Validating SSHD configuration..."
+sudo sshd -t
+if [ $? -ne 0 ]; then
+  echo "ERROR: sshd configuration validation failed! Check $SSHD_CONFIG and logs." >&2
+  # Depending on policy, you might want to exit 1 here or attempt recovery
+fi
+
+# Restart SSHD to apply configuration changes (separate from key update restart)
+echo "Restarting SSHd service to apply configuration changes."
+sudo systemctl restart sshd
+
+# --- Task 11, 12, 13: Command Auditing Setup ---
+echo "--- Starting Tasks 11, 12, 13: Command Auditing Setup ---"
+
+# Task 11: Create directory for session logs
+echo "Creating /var/log/user-sessions directory"
+sudo mkdir -p /var/log/user-sessions
+# Set permissions to allow ubuntu user to write to the directory
+sudo chmod 1755 /var/log/user-sessions # Sticky bit with execute for all
+sudo chown root:root /var/log/user-sessions
+# Add ubuntu user to the adm group which typically has log access
+sudo usermod -a -G adm ubuntu
+# Set group ownership to adm and add group write permissions
+sudo chgrp adm /var/log/user-sessions
+sudo chmod g+w /var/log/user-sessions
+
+# Task 12: Create command logging script
+echo "Creating /etc/profile.d/command-audit.sh"
+sudo cat << 'EOF' > /etc/profile.d/command-audit.sh
+#!/bin/bash
+
+# Prevent duplicate session logging if script is sourced multiple times
+if [ -n "$SCRIPT_STARTED" ]; then
+    return
+fi
+
+# Log only interactive sessions, not scripts or cron jobs
+if [ -z "$PS1" ]; then
+    return
+fi
+
+# Get user information
+USER_ID=$(whoami)
+SESSION_ID=$$
+DATE_TIME=$(date +%Y%m%d_%H%M%S)
+
+# Create log file name with timestamp and session ID
+LOG_FILE="/var/log/user-sessions/$${USER_ID}-session-$${DATE_TIME}-$${SESSION_ID}.log"
+
+# Log session start
+logger -p auth.info "USER:$USER_ID starting session logging to $LOG_FILE"
+
+# Start the script command to log the session
+export SCRIPT_STARTED=1 # Mark that script has started
+script -a -q -f "$LOG_FILE"
+EOF
+
+# Make the command audit script executable
+echo "Making /etc/profile.d/command-audit.sh executable"
+sudo chmod +x /etc/profile.d/command-audit.sh
+
+# Task 13: Configure log rotation for session logs
+echo "Creating /etc/logrotate.d/user-sessions"
+sudo cat << 'EOF' > /etc/logrotate.d/user-sessions
+/var/log/user-sessions/*.log {
+    daily
+    missingok
+    rotate 30
+    compress
+    delaycompress
+    notifempty
+    create 0640 root adm
+    sharedscripts
+    postrotate
+        systemctl reload rsyslog >/dev/null 2>&1 || true
+    endscript
+}
+EOF
+
+# Task 14: Configure PAM for session logging
+echo "Configuring PAM for session logging"
+PAM_SSHD_CONFIG="/etc/pam.d/sshd"
+
+# Add pam_lastlog.so if not already present
+if ! sudo grep -q "session    required     pam_lastlog.so showfailed" "$PAM_SSHD_CONFIG"; then
+    echo "Appending pam_lastlog.so to $PAM_SSHD_CONFIG"
+    echo "session    required     pam_lastlog.so showfailed" | sudo tee -a "$PAM_SSHD_CONFIG"
+else
+    echo "pam_lastlog.so already configured in $PAM_SSHD_CONFIG"
+fi
+
+# --- SSH Key Identifier Setup ---
+echo "--- Setting up SSH Key Identifier System ---"
+
+# Copy the SSH key identifier script from the local file
+cat > /usr/local/bin/ssh_key_identifier.sh << 'EOF'
+#!/bin/bash
+# SSH Key Identifier Script
+# This script extracts user identifiers from SSH keys and logs them with connections
+
+# Create directory for key mapping
+sudo mkdir -p /etc/ssh/key_mapping
+sudo chmod 755 /etc/ssh/key_mapping
+
+# Function to extract identifiers from authorized_keys
+extract_key_identifiers() {
+  local auth_keys_file="/etc/ssh/authorized_keys"
+  local mapping_file="/etc/ssh/key_mapping/fingerprint_to_user.txt"
+  
+  # Clear existing mapping
+  sudo rm -f "$mapping_file"
+  sudo touch "$mapping_file"
+  sudo chmod 644 "$mapping_file"
+  
+  # Process each line in authorized_keys
+  while IFS= read -r line; do
+    # Skip empty lines and comments
+    if [[ -z "$line" || "$line" == \#* ]]; then
+      continue
+    fi
+    
+    # Extract the key and save to a temporary file
+    echo "$line" | sudo tee /tmp/temp_key.pub > /dev/null
+    
+    # Get the fingerprint
+    fingerprint=$(ssh-keygen -lf /tmp/temp_key.pub | awk '{print $2}')
+    
+    # Extract the comment/email (usually at the end of the line)
+    identifier=$(echo "$line" | awk '{print $NF}')
+    
+    # If identifier looks like a valid email or username
+    if [[ "$identifier" == *@* || "$identifier" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+      echo "$fingerprint $identifier" | sudo tee -a "$mapping_file" > /dev/null
+      echo "Mapped fingerprint $fingerprint to user $identifier"
+    else
+      echo "No valid identifier found for key with fingerprint $fingerprint"
+    fi
+  done < "$auth_keys_file"
+  
+  # Clean up
+  rm -f /tmp/temp_key.pub
+}
+
+# Create PAM SSH module hook script
+create_pam_hook() {
+  local hook_script="/etc/ssh/sshrc"
+  
+  sudo cat << 'EOF' | sudo tee "$hook_script" > /dev/null
+#!/bin/bash
+
+# Get the key fingerprint used for this connection
+KEY_FP=$(ssh-keygen -lf <(ssh-keyscan -t rsa,dsa,ecdsa,ed25519 localhost 2>/dev/null) | awk '{print $2}')
+
+# Look up the user identifier
+if [ -f "/etc/ssh/key_mapping/fingerprint_to_user.txt" ]; then
+  USER_ID=$(grep "$KEY_FP" /etc/ssh/key_mapping/fingerprint_to_user.txt | awk '{print $2}')
+  
+  if [ -n "$USER_ID" ]; then
+    # Log the identified user
+    logger -p auth.info "SSH LOGIN: User $USER_ID (fingerprint: $KEY_FP) logged in from $SSH_CLIENT"
+    
+    # Set a custom PS1 prompt with the user identifier
+    echo "export PS1='[$USER_ID] \u@\h:\w\$ '" >> ~/.bashrc
+    
+    # Display welcome message
+    echo "Welcome $USER_ID. Your actions are being logged."
+  else
+    logger -p auth.info "SSH LOGIN: Unknown user with fingerprint $KEY_FP logged in from $SSH_CLIENT"
+    echo "Welcome. Your actions are being logged."
+  fi
+else
+  logger -p auth.info "SSH LOGIN: Key mapping file not found. User from $SSH_CLIENT logged in."
+  echo "Welcome. Your actions are being logged."
+fi
+EOF
+
+  sudo chmod +x "$hook_script"
+}
+
+# Create a script to update key mappings when keys are updated
+create_key_update_hook() {
+  local update_script="/usr/local/bin/update_key_mappings.sh"
+  
+  sudo cat << 'EOF' | sudo tee "$update_script" > /dev/null
+#!/bin/bash
+# This script is called after the authorized_keys file is updated
+
+# Source the functions
+source /usr/local/bin/ssh_key_identifier.sh
+
+# Extract identifiers from the updated keys
+extract_key_identifiers
+
+# Log the update
+logger -p auth.info "SSH key mappings updated"
+EOF
+
+  sudo chmod +x "$update_script"
+  
+  # Add a call to this script in the update_ssh_keys.sh file
+  if [ -f "/usr/local/bin/update_ssh_keys.sh" ]; then
+    # Check if the hook is already added
+    if ! grep -q "update_key_mappings.sh" "/usr/local/bin/update_ssh_keys.sh"; then
+      # Add the call before the exit
+      sudo sed -i '/exit 0/i # Update key mappings\n/usr/local/bin/update_key_mappings.sh' /usr/local/bin/update_ssh_keys.sh
+    fi
+  fi
+}
+
+# Add audit rule to track user commands with the identifier
+setup_audit_rules() {
+  # Create a script to add the audit rules
+  local audit_script="/usr/local/bin/setup_audit_rules.sh"
+  
+  sudo cat << 'EOF' | sudo tee "$audit_script" > /dev/null
+#!/bin/bash
+
+# Add audit rules for command execution
+auditctl -a exit,always -F arch=b64 -S execve -k commands
+auditctl -a exit,always -F arch=b32 -S execve -k commands
+
+# Make rules persistent
+if [ -d "/etc/audit/rules.d" ]; then
+  echo "-a exit,always -F arch=b64 -S execve -k commands" | sudo tee /etc/audit/rules.d/command-logging.rules
+  echo "-a exit,always -F arch=b32 -S execve -k commands" | sudo tee -a /etc/audit/rules.d/command-logging.rules
+fi
+EOF
+
+  sudo chmod +x "$audit_script"
+  sudo "$audit_script"
+}
+
+# Create a script to search audit logs with user identifiers
+create_audit_search_tool() {
+  local search_script="/usr/local/bin/audit-search-by-user.sh"
+  
+  sudo cat << 'EOF' | sudo tee "$search_script" > /dev/null
+#!/bin/bash
+# Script to search audit logs by user identifier
+
+if [ $# -lt 1 ]; then
+  echo "Usage: $0 <user_identifier> [date_spec]"
+  echo "Example: $0 john.doe@example.com today"
+  exit 1
+fi
+
+USER_ID="$1"
+DATE_SPEC="$${2:-today}"
+
+# Find SSH sessions for this user
+echo "=== SSH Sessions for $USER_ID ==="
+grep "SSH LOGIN: User $USER_ID" /var/log/auth.log
+
+# Get the audit session IDs for this user
+SESSION_IDS=$(grep "SSH LOGIN: User $USER_ID" /var/log/auth.log | grep -oP "ses=\K[0-9]+" || echo "")
+
+if [ -z "$SESSION_IDS" ]; then
+  echo "No session IDs found for $USER_ID"
+  exit 0
+fi
+
+# Search audit logs for each session
+for SES_ID in $SESSION_IDS; do
+  echo ""
+  echo "=== Commands for session $SES_ID ==="
+  ausearch -ts "$DATE_SPEC" -k commands --session "$SES_ID" -i
+done
+EOF
+
+  sudo chmod +x "$search_script"
+}
+
+# Main execution
+extract_key_identifiers
+create_pam_hook
+create_key_update_hook
+setup_audit_rules
+create_audit_search_tool
+
+echo "SSH key identifier system has been set up successfully."
+EOF
+
+# Make the script executable
+chmod +x /usr/local/bin/ssh_key_identifier.sh
+
+# Run the script to set up the key identifier system
+/usr/local/bin/ssh_key_identifier.sh
+
+# --- Task 25: Initial Script Runs ---
+echo "--- Starting Task 25: Initial Script Runs ---"
+
+echo "Running initial key update..."
+/usr/local/bin/update_ssh_keys.sh
+
+# --- Finalizing User Data ---
+echo "User data script completed successfully at $(date)"
+
+# No need for a separate main script - we're running everything in this script
+echo "All setup tasks completed successfully."

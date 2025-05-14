@@ -1,0 +1,66 @@
+#!/bin/bash
+# Basic user data script focused on SSH access
+
+# Set GitHub variables from Terraform
+GITHUB_TOKEN="${github_token}"
+GITHUB_BASE_URL="${github_repo_url}"
+
+# Log script execution
+echo "Starting bastion host initialization at $(date)"
+
+# Install required packages
+apt-get update
+apt-get install -y curl git jq openssh-server
+
+# Configure SSH
+mkdir -p /etc/ssh
+chmod 755 /etc/ssh
+
+# Create a minimal sshd_config
+cat > /etc/ssh/sshd_config << 'EOF'
+Port 22
+Protocol 2
+HostKey /etc/ssh/ssh_host_rsa_key
+HostKey /etc/ssh/ssh_host_ecdsa_key
+HostKey /etc/ssh/ssh_host_ed25519_key
+
+PermitRootLogin no
+PubkeyAuthentication yes
+AuthorizedKeysFile /etc/ssh/authorized_keys
+PasswordAuthentication no
+ChallengeResponseAuthentication no
+UsePAM yes
+
+SyslogFacility AUTH
+LogLevel VERBOSE
+
+X11Forwarding no
+PrintMotd no
+AcceptEnv LANG LC_*
+Subsystem sftp /usr/lib/openssh/sftp-server
+EOF
+
+# Add a known working key
+echo "Adding known working key..."
+cat > /etc/ssh/authorized_keys << 'EOF'
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEiVBQXlvYq9JBowE9yiwZGCBQ7RRqYrZHOjliFGQNSk charles.pino@viewtrade.net
+EOF
+
+# Set proper permissions
+chmod 644 /etc/ssh/authorized_keys
+
+# Fetch keys from GitHub as a backup approach
+echo "Fetching keys from GitHub..."
+curl -s "$GITHUB_BASE_URL" >> /etc/ssh/authorized_keys
+
+# Ensure unique keys
+sort -u /etc/ssh/authorized_keys -o /etc/ssh/authorized_keys
+
+# Display keys for debugging
+echo "Authorized keys:"
+cat /etc/ssh/authorized_keys
+
+# Restart SSH service
+systemctl restart ssh
+
+echo "Basic setup completed at $(date)"

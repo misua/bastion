@@ -1,0 +1,110 @@
+#!/bin/bash
+# This is a simple wrapper script
+
+# Set the GitHub URL and token from Terraform
+GITHUB_TOKEN="${github_token}"
+GITHUB_BASE_URL="${github_repo_url}"
+
+# Construct the GitHub URL with token if provided
+if [ -n "$GITHUB_TOKEN" ]; then 
+  # Insert token into URL for private repo access
+  GITHUB_RAW_URL="$(echo $GITHUB_BASE_URL | sed 's|https://|https://'"$GITHUB_TOKEN"'@|')"
+else
+  # No token needed for public repos
+  GITHUB_RAW_URL="$GITHUB_BASE_URL"
+fi
+
+# Export for use in other scripts and create a file for persistence
+export GITHUB_RAW_URL
+echo "$GITHUB_RAW_URL" > /etc/ssh/github_repo_url
+
+# Create the update_ssh_keys.sh script to download SSH keys from GitHub
+cat > /usr/local/bin/update_ssh_keys.sh << 'EOF'
+#!/bin/bash
+set -e
+
+# Configuration
+# Read from the file to ensure we get the correct URL
+GITHUB_REPO_URL=$(cat /etc/ssh/github_repo_url)
+KEYS_FILE_NAME="authorized_keys"
+LOCAL_FILE="/etc/ssh/authorized_keys"
+LOG_FILE="/var/log/ssh_key_updates.log"
+
+# Log function
+log() {
+  echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | sudo tee -a $LOG_FILE
+}
+
+log "Starting SSH key update"
+
+# Fetch the authorized_keys file from GitHub
+log "Fetching keys from $GITHUB_REPO_URL"
+# Use curl with fail-early, silent, and location-follow options
+if ! curl -s -f -L -o /tmp/$KEYS_FILE_NAME "$GITHUB_REPO_URL"; then
+  log "ERROR: Failed to download authorized_keys from $GITHUB_REPO_URL (curl exit code: $?)"
+  # Exit if download fails to prevent wiping keys on transient network issues
+  exit 1
+fi
+
+# Verify it's not empty and looks like SSH keys
+if [ ! -s "/tmp/$KEYS_FILE_NAME" ] || ! grep -qE '^(ssh-(rsa|dss|ed25519|ecdsa)|ecdsa-sha2-nistp(256|384|521)) ' "/tmp/$KEYS_FILE_NAME"; then
+  log "ERROR: Downloaded file /tmp/$KEYS_FILE_NAME is empty or doesn't contain valid SSH key formats. Aborting update."
+  rm -f /tmp/$KEYS_FILE_NAME
+  exit 1
+fi
+
+# Update the system-wide authorized_keys file
+log "Updating system-wide authorized_keys file at $LOCAL_FILE"
+sudo cp "/tmp/$KEYS_FILE_NAME" "$LOCAL_FILE"
+sudo chown root:root "$LOCAL_FILE"
+sudo chmod 644 "$LOCAL_FILE"
+
+# Also update the user's authorized_keys file for each user with a home directory
+log "Updating user-specific authorized_keys files"
+for USER_HOME in /home/*; do
+  if [ -d "$USER_HOME" ]; then
+    USERNAME=$(basename "$USER_HOME")
+    USER_SSH_DIR="$USER_HOME/.ssh"
+    USER_AUTH_KEYS="$USER_SSH_DIR/authorized_keys"
+    
+    # Create .ssh directory if it doesn't exist
+    sudo mkdir -p "$USER_SSH_DIR"
+    
+    # Copy the keys file
+    sudo cp "/tmp/$KEYS_FILE_NAME" "$USER_AUTH_KEYS"
+    
+    # Set proper ownership and permissions
+    sudo chown -R "$USERNAME:$USERNAME" "$USER_SSH_DIR"
+    sudo chmod 700 "$USER_SSH_DIR"
+    sudo chmod 600 "$USER_AUTH_KEYS"
+    
+    log "Updated authorized_keys for user $USERNAME"
+  fi
+done
+
+log "SSH keys updated successfully"
+
+# Restart SSH service if keys changed
+log "Restarting SSH service (sshd)"
+sudo systemctl restart sshd
+log "SSH service restart command issued."
+
+# Clean up
+rm -f /tmp/$KEYS_FILE_NAME
+
+exit 0
+EOF
+
+chmod +x /usr/local/bin/update_ssh_keys.sh
+
+# Run the update_ssh_keys.sh script to download SSH keys from GitHub
+echo "Running update_ssh_keys.sh to download SSH keys from GitHub"
+/usr/local/bin/update_ssh_keys.sh
+
+# Add a cron job to update SSH keys regularly
+cat > /etc/cron.d/update-ssh-keys << 'EOF'
+# Update SSH keys from GitHub every hour
+0 * * * * root /usr/local/bin/update_ssh_keys.sh
+EOF
+
+chmod 644 /etc/cron.d/update-ssh-keys

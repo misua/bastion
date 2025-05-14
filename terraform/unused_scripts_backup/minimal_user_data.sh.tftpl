@@ -1,0 +1,55 @@
+#!/bin/bash
+# Minimal user data script for basic SSH access
+
+# Update and install packages
+apt-get update
+apt-get install -y openssh-server curl
+
+# Configure SSH
+mkdir -p /etc/ssh
+chmod 755 /etc/ssh
+
+# Create a minimal sshd_config
+cat > /etc/ssh/sshd_config << 'EOF'
+Port 22
+Protocol 2
+HostKey /etc/ssh/ssh_host_rsa_key
+HostKey /etc/ssh/ssh_host_ecdsa_key
+HostKey /etc/ssh/ssh_host_ed25519_key
+
+PermitRootLogin no
+PubkeyAuthentication yes
+AuthorizedKeysFile /etc/ssh/authorized_keys
+PasswordAuthentication no
+ChallengeResponseAuthentication no
+UsePAM yes
+
+SyslogFacility AUTH
+LogLevel DEBUG3
+
+X11Forwarding no
+PrintMotd no
+AcceptEnv LANG LC_*
+Subsystem sftp /usr/lib/openssh/sftp-server
+EOF
+
+# Create authorized_keys with hardcoded key
+cat > /etc/ssh/authorized_keys << 'EOF'
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEiVBQXlvYq9JBowE9yiwZGCBQ7RRqYrZHOjliFGQNSk charles.pino@viewtrade.net
+EOF
+
+# Set permissions
+chmod 644 /etc/ssh/authorized_keys
+
+# Enable EC2 Instance Connect
+apt-get install -y ec2-instance-connect
+
+# Restart SSH service
+systemctl restart ssh
+
+# Log for debugging
+echo "SSH setup completed at $(date)" > /var/log/ssh-setup.log
+echo "Authorized keys:" >> /var/log/ssh-setup.log
+cat /etc/ssh/authorized_keys >> /var/log/ssh-setup.log
+echo "SSH config:" >> /var/log/ssh-setup.log
+cat /etc/ssh/sshd_config >> /var/log/ssh-setup.log

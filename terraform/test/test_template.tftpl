@@ -1,0 +1,22 @@
+#!/bin/bash
+# This is a test template to understand Terraform escaping
+
+# Terraform variables
+echo "GitHub Token: ${github_token}"
+echo "GitHub URL: ${github_repo_url}"
+
+# Bash variables (should be escaped with $$)
+TEST_VAR="Hello"
+echo "Test variable: $$TEST_VAR"
+
+# Test with heredoc
+cat > /tmp/test.txt << 'EOF'
+This is a test with $BASH_VAR
+EOF
+
+# Test with another heredoc
+cat > /tmp/test2.txt << EOF
+This is a test with $$BASH_VAR and ${github_token}
+EOF
+
+echo "Test completed"

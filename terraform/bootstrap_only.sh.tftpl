@@ -1,0 +1,42 @@
+#!/bin/bash
+# Absolute minimal bootstrap script
+
+# Set variables from Terraform
+GITHUB_TOKEN="${github_token}"
+GITHUB_REPO_URL="${github_repo_url}"
+
+# Store token and URL
+mkdir -p /etc/ssh
+echo "$GITHUB_TOKEN" > /etc/github_token
+echo "$GITHUB_REPO_URL" > /etc/github_repo_url
+chmod 600 /etc/github_token
+chmod 644 /etc/github_repo_url
+
+# Create basic key download script
+cat > /usr/local/bin/download_keys.sh << EOF
+#!/bin/bash
+TOKEN=\$(cat /etc/github_token)
+REPO_URL=\$(cat /etc/github_repo_url)
+FULL_URL=\$(echo "\$REPO_URL" | sed "s|https://|https://\$TOKEN@|")
+curl -s -o /tmp/keys "\$FULL_URL"
+
+if [ -s "/tmp/keys" ]; then
+  mkdir -p /etc/ssh
+  cp /tmp/keys /etc/ssh/authorized_keys
+  chmod 644 /etc/ssh/authorized_keys
+  mkdir -p /home/ubuntu/.ssh
+  cp /tmp/keys /home/ubuntu/.ssh/authorized_keys
+  chown ubuntu:ubuntu /home/ubuntu/.ssh/authorized_keys
+  chmod 600 /home/ubuntu/.ssh/authorized_keys
+  rm /tmp/keys
+  systemctl restart sshd
+fi
+EOF
+
+chmod +x /usr/local/bin/download_keys.sh
+
+# Run the key download script
+/usr/local/bin/download_keys.sh
+
+# Set up cron job for hourly updates
+echo "0 * * * * /usr/local/bin/download_keys.sh" | crontab -
