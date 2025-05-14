@@ -57,10 +57,10 @@ The deployment process automatically:
 
 ### Forcing an Immediate Key Update
 
-If you need immediate access without waiting for the hourly cron job:
+In break-glass situations where immediate access is needed without waiting for the 30-minute cron job, ask your administrator to:
 
-1. SSH into the bastion host (if you already have access)
-2. Run the download script manually: (this assumes you are already have access to the bastion host)
+1. SSH into the bastion host
+2. Run the download script manually:
    ```bash
    sudo /usr/local/bin/download_keys.sh
    ```
