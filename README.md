@@ -125,18 +125,12 @@ To view all authentication events:
 sudo ausearch -m USER_AUTH
 ```
 
-#### Enabling Command Auditing
+#### Viewing Command Execution
 
-To enable detailed command auditing on the bastion host:
+To view command execution logs on the bastion host:
 
 1. SSH into the bastion host
-2. Add the following rule to the audit system (active until next reboot):
-
-   ```bash
-   sudo auditctl -a exit,always -F arch=b64 -S execve -k commands
-   ```
-
-3. After adding this rule, you can view all executed commands with:
+2. View the command audit logs with:
 
    ```bash
    sudo ausearch -k commands
