@@ -60,7 +60,7 @@ The deployment process automatically:
 If you need immediate access without waiting for the hourly cron job:
 
 1. SSH into the bastion host (if you already have access)
-2. Run the download script manually:
+2. Run the download script manually: (this assumes you are already have access to the bastion host)
    ```bash
    sudo /usr/local/bin/download_keys.sh
    ```
@@ -72,7 +72,7 @@ If you need immediate access without waiting for the hourly cron job:
 
 ## Audit Functionality
 
-The bastion host includes comprehensive audit functionality that tracks SSH logins and associates them with email identifiers.
+The bastion host includes audit functionality that tracks SSH logins and associates them with email identifiers.
 
 ### Key Features
 
