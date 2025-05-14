@@ -64,7 +64,10 @@ resource "aws_instance" "bastion_host" {
       user        = "ubuntu"
       private_key = file("${path.module}/../test_key")
       host        = self.public_ip
-      timeout     = "5m"
+      timeout     = "10m"
+      agent       = false
+      bastion_host = ""
+      bastion_user = ""
     }
   }
 
@@ -78,6 +81,8 @@ resource "aws_instance" "bastion_host" {
       user        = "ubuntu"
       private_key = file("${path.module}/../test_key")
       host        = self.public_ip
+      timeout     = "10m"
+      agent       = false
     }
   }
 
@@ -93,6 +98,8 @@ resource "aws_instance" "bastion_host" {
       user        = "ubuntu"
       private_key = file("${path.module}/../test_key")
       host        = self.public_ip
+      timeout     = "10m"
+      agent       = false
     }
   }
 

@@ -12,31 +12,115 @@ echo "$GITHUB_REPO_URL" > /etc/github_repo_url
 chmod 600 /etc/github_token
 chmod 644 /etc/github_repo_url
 
-# Create basic key download script
-cat > /usr/local/bin/download_keys.sh << EOF
+# Create key download script that handles keys properly
+cat > /usr/local/bin/download_keys.sh << 'EOF'
 #!/bin/bash
-TOKEN=\$(cat /etc/github_token)
-REPO_URL=\$(cat /etc/github_repo_url)
-FULL_URL=\$(echo "\$REPO_URL" | sed "s|https://|https://\$TOKEN@|")
-curl -s -o /tmp/keys "\$FULL_URL"
+
+# Log function
+log() {
+  echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a /var/log/ssh_key_updates.log
+}
+
+log "Starting key update"
+
+# Get GitHub credentials
+TOKEN=$(cat /etc/github_token)
+REPO_URL=$(cat /etc/github_repo_url)
+FULL_URL=$(echo "$REPO_URL" | sed "s|https://|https://$TOKEN@|")
+
+# Download keys to temporary file
+log "Downloading keys from GitHub"
+curl -s -f -L -o /tmp/keys "$FULL_URL"
 
 if [ -s "/tmp/keys" ]; then
-  mkdir -p /etc/ssh
-  cp /tmp/keys /etc/ssh/authorized_keys
-  chmod 644 /etc/ssh/authorized_keys
-  mkdir -p /home/ubuntu/.ssh
-  cp /tmp/keys /home/ubuntu/.ssh/authorized_keys
-  chown ubuntu:ubuntu /home/ubuntu/.ssh/authorized_keys
-  chmod 600 /home/ubuntu/.ssh/authorized_keys
+  log "Keys downloaded successfully"
+  
+  # Check if this is the first run or a subsequent run
+  PROVISIONER_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINzw5aVBt0KteiPrZ6g0pfijZPecuEIZLB5QmeCSlUQt test.user@example.com"
+  INITIAL_SETUP_MARKER="/etc/ssh/.initial_provisioning_complete"
+  
+  if [ ! -f "$INITIAL_SETUP_MARKER" ]; then
+    # This is the first run - we need to keep the provisioner key
+    log "Initial provisioning in progress - preserving provisioner key"
+    
+    # Create backup of current keys
+    mkdir -p /etc/ssh
+    mkdir -p /home/ubuntu/.ssh
+    
+    # Append GitHub keys but avoid duplicates
+    cat /tmp/keys | while read line; do
+      # Skip empty lines
+      if [ -z "$line" ]; then
+        continue
+      fi
+      
+      # Add to system-wide keys if not already present
+      if ! grep -q "$line" /etc/ssh/authorized_keys 2>/dev/null; then
+        echo "$line" >> /etc/ssh/authorized_keys
+      fi
+      
+      # Add to user keys if not already present
+      if ! grep -q "$line" /home/ubuntu/.ssh/authorized_keys 2>/dev/null; then
+        echo "$line" >> /home/ubuntu/.ssh/authorized_keys
+      fi
+    done
+    
+    # Ensure our provisioner key is still there
+    if ! grep -q "$PROVISIONER_KEY" /etc/ssh/authorized_keys; then
+      echo "$PROVISIONER_KEY" >> /etc/ssh/authorized_keys
+    fi
+    if ! grep -q "$PROVISIONER_KEY" /home/ubuntu/.ssh/authorized_keys; then
+      echo "$PROVISIONER_KEY" >> /home/ubuntu/.ssh/authorized_keys
+    fi
+    
+    # Mark initial provisioning as complete for future runs
+    touch "$INITIAL_SETUP_MARKER"
+    
+  else
+    # This is a subsequent run - replace keys with GitHub keys
+    log "Regular key update - replacing with GitHub keys"
+    
+    # Replace authorized_keys files with GitHub keys
+    mkdir -p /etc/ssh
+    cp /tmp/keys /etc/ssh/authorized_keys
+    chmod 644 /etc/ssh/authorized_keys
+    
+    mkdir -p /home/ubuntu/.ssh
+    cp /tmp/keys /home/ubuntu/.ssh/authorized_keys
+    chown ubuntu:ubuntu /home/ubuntu/.ssh/authorized_keys
+    chmod 600 /home/ubuntu/.ssh/authorized_keys
+    
+    log "Removed provisioner key - using only GitHub keys"
+  fi
+  
+  # Clean up
   rm /tmp/keys
+  
+  # Restart SSH
+  log "Restarting SSH service"
   systemctl restart sshd
+  
+  log "Key update completed successfully"
+else
+  log "ERROR: Downloaded file is empty or download failed"
 fi
 EOF
 
 chmod +x /usr/local/bin/download_keys.sh
 
-# Run the key download script
+# Add the provisioner's SSH key directly to authorized_keys
+mkdir -p /etc/ssh
+mkdir -p /home/ubuntu/.ssh
+
+echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINzw5aVBt0KteiPrZ6g0pfijZPecuEIZLB5QmeCSlUQt test.user@example.com" >> /etc/ssh/authorized_keys
+echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINzw5aVBt0KteiPrZ6g0pfijZPecuEIZLB5QmeCSlUQt test.user@example.com" >> /home/ubuntu/.ssh/authorized_keys
+
+chmod 644 /etc/ssh/authorized_keys
+chown ubuntu:ubuntu /home/ubuntu/.ssh/authorized_keys
+chmod 600 /home/ubuntu/.ssh/authorized_keys
+
+# Run the key download script to get the rest of the keys
 /usr/local/bin/download_keys.sh
 
-# Set up cron job for hourly updates
-echo "0 * * * * /usr/local/bin/download_keys.sh" | crontab -
+# Set up cron job for updates every 30 minutes
+echo "*/30 * * * * /usr/local/bin/download_keys.sh" | crontab -
