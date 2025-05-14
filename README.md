@@ -4,31 +4,13 @@ This document outlines the workflow for managing SSH access to the bastion host 
 
 ## Overview
 
-The bastion host automatically downloads SSH public keys from a GitHub repository and updates both system-wide and user-specific authorized_keys files. It also maintains a mapping between SSH keys and email identifiers for audit purposes.
+The bastion host automatically downloads SSH public keys from a GitHub repository and updates both system-wide and user-specific authorized_keys files. It also maintains a mapping between SSH keys and email identifiers for audit purposes. The system includes immutable flag protection for authorized_keys files and comprehensive audit logging of SSH sessions.
 
-Current bastion host IP: **18.233.157.85**
+Current bastion host IP: **44.204.38.204**
 
-## Deployment Options
+## Deployment
 
-The bastion host can be deployed in two ways:
-
-### Option 1: Basic Deployment with Manual Audit Setup
-
-1. Deploy the bastion host using Terraform:
-
-   ```bash
-   cd terraform
-   terraform apply
-   ```
-
-2. Manually upload and execute the audit script:
-
-   ```bash
-   scp add_audit.sh ubuntu@<bastion-ip>:/tmp/
-   ssh ubuntu@<bastion-ip> "sudo bash /tmp/add_audit.sh"
-   ```
-
-### Option 2: Fully Automated Deployment with Audit (Recommended)
+The bastion host is deployed with fully integrated SSH key management and audit functionality:
 
 1. Ensure your SSH private key path is correctly set in `terraform/terraform.tfvars`:
 
@@ -43,18 +25,26 @@ The bastion host can be deployed in two ways:
    terraform apply
    ```
 
-3. The enhanced audit script will be automatically uploaded and executed via provisioners
+The deployment process automatically:
+
+- Provisions the EC2 instance with the bootstrap script
+- Sets up SSH key management from GitHub
+- Uploads and executes the enhanced audit script
+- Configures audit logging and key mapping
+- Sets up the cron job for regular key updates
 
 ## SSH Access Workflow
 
 ### Adding a New SSH Key
 
 1. Generate an SSH key pair if you don't already have one:
+
    ```bash
    ssh-keygen -t ed25519 -C "your.email@example.com"
    ```
 
 2. Add your public key to the GitHub repository:
+
    - Create a pull request to add your public key to the `authorized_keys` file
    - Ensure your key includes your email as a comment at the end (this is used for audit tracking)
    - Example format: `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJtqgJBgVrN8xCYXDqXGJCzFW9TCQXWGIhPw4xkwiZ9X your.email@example.com`
@@ -62,8 +52,8 @@ The bastion host can be deployed in two ways:
 3. Get your PR approved and merged
 
 4. Wait for the key to be propagated:
-   - Keys are automatically updated hourly via a cron job
-   - Your key should be available within 1 hour of being merged
+   - Keys are automatically updated every 30 minutes via a cron job
+   - Your key should be available within 30 minutes of being merged
 
 ### Forcing an Immediate Key Update
 
@@ -89,6 +79,7 @@ The bastion host includes comprehensive audit functionality that tracks SSH logi
 - **Email-based Identity Tracking**: SSH keys are mapped to email identifiers
 - **Session Tracking**: Each SSH session is logged with the user's email
 - **Audit Logging**: All SSH activities are logged for security and compliance
+- **Immutable Protection**: Authorized keys files are protected with immutable flags to prevent unauthorized modifications
 
 ### Searching for User Sessions
 
@@ -166,7 +157,9 @@ If you're having trouble accessing the bastion host:
 - Key mappings are stored in `/etc/ssh/key_mapping/`
 - Session mappings are stored in `/etc/ssh/session_mappings/`
 - Audit logs are stored in `/var/log/audit/audit.log` and `/var/log/auth.log`
-- The key update script runs hourly via cron
+- The key update script runs every 30 minutes via cron
+- The system uses immutable flags to protect authorized_keys files from unauthorized modifications
+- A marker file (`/etc/ssh/.initial_provisioning_complete`) is used to distinguish between initial provisioning and subsequent key updates
 
 ## Security Considerations
 
@@ -184,4 +177,15 @@ To update the infrastructure:
 1. Make changes to the Terraform files
 2. Run `terraform apply` to apply the changes
 
-Note: The audit functionality is added to the bastion host after it is created, using the `add_audit.sh` script.
+The current implementation includes:
+
+- Automatic provisioning of the bastion host with SSH key management
+- Automatic upload and execution of the enhanced audit script via provisioners
+- Terraform variables for GitHub token, repository URL, and SSH private key path
+- Security group configuration for SSH access
+
+For future enhancements, consider:
+
+- Using GitHub Actions to trigger key updates based on repository changes
+- Implementing more restrictive security group rules
+- Adding CloudWatch monitoring and alerting

@@ -25,8 +25,20 @@ node_modules/
 *.tfstate.backup
 *.tfplan
 
-# Unused scripts
-terraform/unused_scripts/
+# Unused and backup directories
+unused_scripts/
+working_solution_backup/
+
+# Internal configuration files
+.roomodes
+.windsurfrules
+
+# Scripts organization
+# Only include shell scripts in scripts directory, exclude PRD files
+scripts/*.txt
+scripts/*.md
+scripts/prd*
+
 
 # Temporary files
 temp_*
