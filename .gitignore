@@ -31,8 +31,8 @@ node_modules/
 /tests/
 
 # Internal configuration files
-.roomodes
-.windsurfrules
+/.roomodes
+/.windsurfrules
 
 # Scripts organization
 # Only include shell scripts in scripts directory, exclude PRD files
