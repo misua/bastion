@@ -109,32 +109,45 @@ sudo ausearch -k sshd_config
 
 ### Tracking Command Execution
 
-To view a summary report of commands executed by users on the bastion host:
+The bastion host's audit system tracks SSH sessions and can be used to monitor user activity. Here are the correct commands to use with our existing audit configuration:
+
+#### Using Audit Logs for SSH Activity
+
+To search for activity by a specific login user:
 
 ```bash
-sudo aureport --tty
+sudo ausearch -ul <username>
 ```
 
-This provides a tabular summary view with basic information about terminal commands.
-
-For detailed command execution logs with full timestamps and complete information:
+To view all authentication events:
 
 ```bash
-sudo ausearch --tty
+sudo ausearch -m USER_AUTH
 ```
 
-The `ausearch` command shows the raw audit records with all available details.
+#### Enabling Command Auditing
+
+To enable detailed command auditing, add the following rule to the audit system:
+
+```bash
+sudo auditctl -a exit,always -F arch=b64 -S execve -k commands
+```
+
+After adding this rule, you can view executed commands with:
+
+```bash
+sudo ausearch -k commands
+```
 
 To filter command execution by a specific user:
 
 ```bash
-sudo ausearch --tty | grep <username>
+sudo ausearch -k commands | grep <username>
 ```
-
 To view commands executed in a specific session (using the session ID from search-by-email.sh):
 
 ```bash
-sudo ausearch --tty | grep <session-id>
+sudo ausearch -k commands | grep <session-id>
 ```
 
 ### Viewing Raw Auth Logs
