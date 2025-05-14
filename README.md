@@ -107,6 +107,32 @@ To view all changes to SSH configuration:
 sudo ausearch -k sshd_config
 ```
 
+### Tracking Command Execution
+
+To view commands executed by users on the bastion host:
+
+```bash
+sudo aureport --tty
+```
+
+For more detailed command execution logs with timestamps:
+
+```bash
+sudo ausearch --tty
+```
+
+To filter command execution by a specific user:
+
+```bash
+sudo ausearch --tty | grep <username>
+```
+
+To view commands executed in a specific session (using the session ID from search-by-email.sh):
+
+```bash
+sudo ausearch --tty | grep <session-id>
+```
+
 ### Viewing Raw Auth Logs
 
 To view the raw authentication logs:
