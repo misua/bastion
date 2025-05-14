@@ -33,6 +33,7 @@ node_modules/
 # Internal configuration files
 /.roomodes
 /.windsurfrules
+/.env.example
 
 # Scripts organization
 # Only include shell scripts in scripts directory, exclude PRD files
