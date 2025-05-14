@@ -127,28 +127,38 @@ sudo ausearch -m USER_AUTH
 
 #### Enabling Command Auditing
 
-To enable detailed command auditing, add the following rule to the audit system:
+To enable detailed command auditing on the bastion host:
 
-```bash
-sudo auditctl -a exit,always -F arch=b64 -S execve -k commands
-```
+1. SSH into the bastion host
+2. Add the following rule to the audit system (active until next reboot):
 
-After adding this rule, you can view executed commands with:
+   ```bash
+   sudo auditctl -a exit,always -F arch=b64 -S execve -k commands
+   ```
 
-```bash
-sudo ausearch -k commands
-```
+3. After adding this rule, you can view all executed commands with:
 
-To filter command execution by a specific user:
+   ```bash
+   sudo ausearch -k commands
+   ```
 
-```bash
-sudo ausearch -k commands | grep <username>
-```
-To view commands executed in a specific session (using the session ID from search-by-email.sh):
+#### Tracking Commands by Email
 
-```bash
-sudo ausearch -k commands | grep <session-id>
-```
+Since all users log in as the "ubuntu" user, the best way to track commands by user is:
+
+1. First identify the session IDs associated with an email:
+
+   ```bash
+   sudo /usr/local/bin/search-by-email.sh user.email@example.com
+   ```
+
+2. Then use those session IDs to filter the command audit logs:
+
+   ```bash
+   sudo ausearch -k commands | grep <session-id>
+   ```
+
+This allows you to see all commands executed by a specific user identified by their email.
 
 ### Viewing Raw Auth Logs
 
