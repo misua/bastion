@@ -26,8 +26,9 @@ node_modules/
 *.tfplan
 
 # Unused and backup directories
-unused_scripts/
-working_solution_backup/
+/unused_scripts/
+/working_solution_backup/
+/tests/
 
 # Internal configuration files
 .roomodes
