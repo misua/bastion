@@ -93,66 +93,50 @@ This will display:
 - All session IDs associated with that email
 - Log entries for each session
 
-### Viewing Audit Logs
+### Audit Workflow
 
-To view all SSH-related audit logs:
+The bastion host's audit system tracks SSH sessions by email identifier, allowing you to monitor who accessed the system and what they did. Here's how to use it:
+
+#### Step 1: List Available Email Identifiers
+
+To see which email identifiers are currently mapped to SSH keys:
 
 ```bash
-sudo ausearch -k ssh_sessions
+sudo ls -la /etc/ssh/key_mapping/
+sudo cat /etc/ssh/key_mapping/*
 ```
 
-To view all changes to SSH configuration:
+This shows all email identifiers that have accessed the system.
+
+#### Step 2: Find Sessions for a Specific User
+
+To find all SSH sessions associated with a specific email:
+
+```bash
+sudo /usr/local/bin/search-by-email.sh user.email@example.com
+```
+
+This will display:
+- All session IDs associated with that email
+- Log entries for each session
+
+#### Step 3: View Detailed Session Activity
+
+Once you have the session IDs, you can view detailed activity:
+
+```bash
+sudo ausearch -k ssh_sessions | grep <session-id>
+```
+
+#### Step 4: View SSH Configuration Changes
+
+To monitor changes to SSH configuration:
 
 ```bash
 sudo ausearch -k sshd_config
 ```
 
-### Tracking Command Execution
-
-The bastion host's audit system tracks SSH sessions and can be used to monitor user activity. Here are the correct commands to use with our existing audit configuration:
-
-#### Using Audit Logs for SSH Activity
-
-To search for activity by a specific login user:
-
-```bash
-sudo ausearch -ul <username>
-```
-
-To view all authentication events:
-
-```bash
-sudo ausearch -m USER_AUTH
-```
-
-#### Viewing Command Execution
-
-To view command execution logs on the bastion host:
-
-1. SSH into the bastion host
-2. View the command audit logs with:
-
-   ```bash
-   sudo ausearch -k commands
-   ```
-
-#### Tracking Commands by Email
-
-Since all users log in as the "ubuntu" user, the best way to track commands by user is:
-
-1. First identify the session IDs associated with an email:
-
-   ```bash
-   sudo /usr/local/bin/search-by-email.sh user.email@example.com
-   ```
-
-2. Then use those session IDs to filter the command audit logs:
-
-   ```bash
-   sudo ausearch -k commands | grep <session-id>
-   ```
-
-This allows you to see all commands executed by a specific user identified by their email.
+This audit workflow allows you to track who accessed the system, when they connected, and what activity occurred during their session.
 
 ### Viewing Raw Auth Logs
 
