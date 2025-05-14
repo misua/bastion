@@ -109,17 +109,21 @@ sudo ausearch -k sshd_config
 
 ### Tracking Command Execution
 
-To view commands executed by users on the bastion host:
+To view a summary report of commands executed by users on the bastion host:
 
 ```bash
 sudo aureport --tty
 ```
 
-For more detailed command execution logs with timestamps:
+This provides a tabular summary view with basic information about terminal commands.
+
+For detailed command execution logs with full timestamps and complete information:
 
 ```bash
 sudo ausearch --tty
 ```
+
+The `ausearch` command shows the raw audit records with all available details.
 
 To filter command execution by a specific user:
 
