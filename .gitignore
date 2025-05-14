@@ -24,6 +24,10 @@ node_modules/
 *.tfstate
 *.tfstate.backup
 *.tfplan
+.terraform.lock.hcl
+plan.out
+plan.txt
+terraform/unused_scripts/
 
 # Unused and backup directories
 /unused_scripts/
