@@ -39,6 +39,8 @@ node_modules/
 scripts/*.txt
 scripts/*.md
 scripts/prd*
+scripts/prd.txt
+scripts/example_prd.txt
 
 
 # Temporary files
