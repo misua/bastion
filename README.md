@@ -6,7 +6,7 @@ This document outlines the workflow for managing SSH access to the bastion host 
 
 The bastion host automatically downloads SSH public keys from a GitHub repository and updates both system-wide and user-specific authorized_keys files. It also maintains a mapping between SSH keys and email identifiers for audit purposes. The system includes immutable flag protection for authorized_keys files and comprehensive audit logging of SSH sessions.
 
-Current bastion host IP: **44.204.38.204**
+Current bastion host IP: **44.204.88.224**
 
 ## Deployment
 
@@ -144,6 +144,59 @@ To view the raw authentication logs:
 
 ```bash
 sudo grep "SSH LOGIN" /var/log/auth.log
+```
+
+## Project Flow Diagram
+
+```mermaid
+graph TD
+    subgraph Terraform Configuration
+        A[variables.tf] --> B(main.tf: Define Resources)
+        B --> C{bootstrap_only.sh.tftpl: Provisioning Script}
+        B --> D[outputs.tf]
+    end
+
+    subgraph Infrastructure Provisioning
+        E[User provides variables] --> A
+        B --> F(AWS EC2 Instance: Bastion Host)
+        B --> G(AWS Security Group: SSH Access)
+        F --> C
+    end
+
+    subgraph Bastion Host Bootstrap
+        C --> C1(Set GITHUB_TOKEN & GITHUB_REPO_URL)
+        C1 --> C2(Create /usr/local/bin/download_keys.sh)
+        C2 --> C3(Add Provisioner SSH Key to authorized_keys)
+        C3 --> C4(Execute download_keys.sh for initial keys)
+        C4 --> C5(Set up Cron Job for download_keys.sh)
+    end
+
+    subgraph download_keys.sh Logic
+        D1(Fetch SSH Keys from GitHub Repo)
+        D1 --> D2{Is this initial provisioning?}
+        D2 -- Yes --> D3(Append GitHub Keys, Preserve Provisioner Key)
+        D2 -- No --> D4(Replace authorized_keys with GitHub Keys)
+        D3 & D4 --> D5(Restart SSH Service)
+    end
+
+    C4 & C5 --> D1
+    F --> C1
+    G --> F
+    D5 --> H(Bastion Host Ready with Dynamic SSH Keys)
+    H --> D
+    D --> I[User gets outputs]
+
+    style C fill:#f9f,stroke:#333,stroke-width:2px
+    style C1 fill:#f9f,stroke:#333,stroke-width:2px
+    style C2 fill:#f9f,stroke:#333,stroke-width:2px
+    style C3 fill:#f9f,stroke:#333,stroke-width:2px
+    style C4 fill:#f9f,stroke:#333,stroke-width:2px
+    style C5 fill:#f9f,stroke:#333,stroke-width:2px
+    style D1 fill:#ccf,stroke:#333,stroke-width:2px
+    style D2 fill:#ccf,stroke:#333,stroke-width:2px
+    style D3 fill:#ccf,stroke:#333,stroke-width:2px
+    style D4 fill:#ccf,stroke:#333,stroke-width:2px
+    style D5 fill:#ccf,stroke:#333,stroke-width:2px
 ```
 
 ## Troubleshooting
